@@ -1,62 +1,14 @@
-# API_KEY = 'PUDPSYYSPAF8IGTR'
-# API_KEY = 'QET9BN7YKRRNED2B'
-
 import pandas as pd
-import requests
 import os
-from datetime import datetime, timedelta
-import time
+from datetime import datetime
 
-API_KEY = 'QET9BN7YKRRNED2B'
 SYMBOL = 'SPY'
-INTERVAL = '1min'
-API_CALLS_LIMIT = 5  # AlphaVantage每分钟最多允许5次API调用
+ORIGINAL_DATA_PATH = 'data/original_data/SPY_intraday_2024-04-01_to_2024-07-30.csv'
+DAILY_DATA_DIR = 'data/daily_data'
 
-def get_intraday_data(symbol, interval, api_key, start_date, end_date):
-    data_frames = []
-    current_date = end_date
-
-    while current_date >= start_date:
-        year_month = current_date.strftime("%Y-%m")
-        url = f'https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={symbol}&interval={interval}&apikey={api_key}&outputsize=full&month={year_month}'
-        print(f'Fetching data for {year_month}')
-        response = requests.get(url)
-        if response.status_code == 200:
-            data = response.json()
-            if 'Time Series (1min)' in data:
-                df = pd.DataFrame.from_dict(data['Time Series (1min)'], orient='index')
-                df = df.rename(columns={
-                    '1. open': 'Open',
-                    '2. high': 'High',
-                    '3. low': 'Low',
-                    '4. close': 'Close',
-                    '5. volume': 'Volume'
-                })
-                df.index = pd.to_datetime(df.index)
-                df = df.astype(float)
-                data_frames.append(df)
-            else:
-                print(f"Unexpected data format for {year_month}: {data}")
-        else:
-            print(f"HTTP Error: {response.status_code}")
-
-        current_date -= timedelta(days=30)
-        time.sleep(60 / API_CALLS_LIMIT)  # 避免API速率限制
-
-    if data_frames:
-        full_data = pd.concat(data_frames)
-        full_data = full_data[~full_data.index.duplicated(keep='first')]  # 删除重复数据
-        return full_data
-    else:
-        return pd.DataFrame()  # 返回空的 DataFrame 以防止后续代码出错
-
-def get_full_data(symbol, interval, api_key, start_date=None, end_date=None, days=None):
-    if days:
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
-    elif not (start_date and end_date):
-        raise ValueError("Either days or both start_date and end_date must be specified")
-    return get_intraday_data(symbol, interval, api_key, start_date, end_date)
+# 确保保存每日数据的目录存在
+if not os.path.exists(DAILY_DATA_DIR):
+    os.makedirs(DAILY_DATA_DIR)
 
 def compute_rsi(series, period=6):
     delta = series.diff(1)
@@ -164,7 +116,7 @@ def get_advanced_technical_indicators(df):
     df['CCI'] = compute_cci(df)
 
     # 检查和处理生成的 NaN 值
-    df = df.ffill().bfillna()
+    df = df.ffill().bfill()
     
     # 打印每个特征计算后的样本以确保数据有效
     print("RSI calculated")
@@ -196,41 +148,10 @@ def get_advanced_technical_indicators(df):
 
     return df
 
-def update_daily_data(symbol, interval, api_key):
-    data_dir = 'data/daily_data'
-    original_data_dir = 'data/original_data'
-    if not os.path.exists(data_dir):
-        os.makedirs(data_dir)
-    if not os.path.exists(original_data_dir):
-        os.makedirs(original_data_dir)
+def process_and_save_data(file_path, output_dir):
+    df = pd.read_csv(file_path, index_col=0, parse_dates=True)
     
-    # 找到最新的日期文件
-    files = os.listdir(data_dir)
-    if not files:
-        print("No existing data found. Fetching the last 120 days of data.")
-        start_date = datetime.now() - timedelta(days=120)
-        end_date = datetime.now()
-    else:
-        latest_file = max(files)
-        latest_date_str = latest_file.split('_')[-1].split('.')[0]
-        latest_date = datetime.strptime(latest_date_str, '%Y-%m-%d')
-        start_date = latest_date + timedelta(days=1)
-        end_date = datetime.now()
-
-    # 获取从最新日期到今天的数据
-    df = get_intraday_data(symbol, interval, api_key, start_date, end_date)
-    df = df.sort_index()
-    if df.empty:
-        print("No new data fetched.")
-        return
-
-    print(f"Fetched data from {start_date} to {end_date}")
     print(f"Original data sample:\n{df.head()}")
-
-    # 保存未切分的原始数据
-    original_file_path = os.path.join(original_data_dir, f'{symbol}_intraday_{start_date.strftime("%Y-%m-%d")}_to_{end_date.strftime("%Y-%m-%d")}.csv')
-    df.to_csv(original_file_path)
-    print(f"Saved original data to {original_file_path}")
 
     # 数据按时间顺序排序
     df = df.sort_index()
@@ -256,9 +177,10 @@ def update_daily_data(symbol, interval, api_key):
 
     # 按天切分并保存
     for date, group in df.groupby(df.index.date):
-        output_file = os.path.join(data_dir, f'{symbol}_intraday_{date}.csv')
+        output_file = os.path.join(output_dir, f'{SYMBOL}_intraday_{date}.csv')
         group.to_csv(output_file)
 
-    print(f"New data has been fetched and saved to {data_dir}")
+    print(f"Processed data has been saved to {output_dir}")
 
-update_daily_data(SYMBOL, INTERVAL, API_KEY)
+# 处理并保存数据
+process_and_save_data(ORIGINAL_DATA_PATH, DAILY_DATA_DIR)
