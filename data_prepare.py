@@ -1,21 +1,22 @@
 import pandas as pd
 import requests
 import time
-import numpy as np
 from datetime import datetime, timedelta
 import io
 
-API_KEY = 'PUDPSYYSPAF8IGTR'
+API_KEY = 'QET9BN7YKRRNED2B'
 SYMBOL = 'SPY'
 INTERVAL = '1min'
+API_CALLS_LIMIT = 5  # AlphaVantage每分钟最多允许5次API调用
 
 def get_intraday_data(symbol, interval, api_key, start_date, end_date):
     data_frames = []
-    current_date = start_date
+    current_date = end_date
 
-    while current_date <= end_date:
-        url = f'https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={symbol}&interval={interval}&apikey={api_key}&outputsize=full'
-        print(f'Fetching data starting from {current_date.strftime("%Y-%m-%d")}')
+    while current_date >= start_date:
+        year_month = current_date.strftime("%Y-%m")
+        url = f'https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={symbol}&interval={interval}&apikey={api_key}&outputsize=full&month={year_month}'
+        print(f'Fetching data for {year_month}')
         response = requests.get(url)
         if response.status_code == 200:
             data = response.json()
@@ -30,27 +31,18 @@ def get_intraday_data(symbol, interval, api_key, start_date, end_date):
                 })
                 df.index = pd.to_datetime(df.index)
                 df = df.astype(float)
-
-                # 筛选出指定时间范围内的数据
-                df = df[(df.index >= current_date) & (df.index <= end_date)]
-                
-                if not df.empty:
-                    latest_timestamp = df.index.max()
-                    current_date = latest_timestamp + timedelta(minutes=1)
-                    data_frames.append(df)
-                else:
-                    break
+                data_frames.append(df)
             else:
-                print(f"Error: {data}")
-                break
+                print(f"Unexpected data format for {year_month}: {data}")
         else:
             print(f"HTTP Error: {response.status_code}")
-            break
-        
-        time.sleep(12)  # 避免API速率限制
+
+        current_date -= timedelta(days=30)
+        time.sleep(60 / API_CALLS_LIMIT)  # 避免API速率限制
 
     if data_frames:
         full_data = pd.concat(data_frames)
+        full_data = full_data[~full_data.index.duplicated(keep='first')]  # 删除重复数据
         return full_data
     else:
         return pd.DataFrame()  # 返回空的 DataFrame 以防止后续代码出错
@@ -64,7 +56,7 @@ def get_full_data(symbol, interval, api_key, start_date=None, end_date=None, day
     return get_intraday_data(symbol, interval, api_key, start_date, end_date)
 
 # 获取数据
-days_to_fetch = 30  # 用户可修改的参数，表示获取多少天的数据
+days_to_fetch = 90  # 用户可修改的参数，表示获取多少天的数据
 start_date = None  # 可以设置为用户指定的起始日期，例如 datetime(2023, 1, 1)
 end_date = None  # 可以设置为用户指定的结束日期，例如 datetime(2023, 6, 30)
 df = get_full_data(SYMBOL, INTERVAL, API_KEY, start_date=start_date, end_date=end_date, days=days_to_fetch)
@@ -105,7 +97,10 @@ if not df.empty:
     df['Price_Change'] = df['Close'].pct_change()
     df['High_Low_Spread'] = df['High'] - df['Low']
     df['Close_Open_Spread'] = df['Close'] - df['Open']
-    df['Open_Prev_Close_Spread'] = df['Open'] - df['Close'].shift(1)
+
+    # 计算当日开盘价相对于上一个交易日收盘价之间的价差
+    df['Previous_Close'] = df['Close'].shift(1)
+    df['Open_Close_Diff'] = df['Open'] - df['Previous_Close']
 
     # 数据清洗：处理缺失值
     df.dropna(inplace=True)
