@@ -5,3 +5,6 @@ torch
 xgboost 
 scikit-learn 
 schedule
+matplotlib
+seaborn
+nbeats-pytorch

@@ -1,6 +1,3 @@
-# API_KEY = 'PUDPSYYSPAF8IGTR'
-# API_KEY = 'QET9BN7YKRRNED2B'
-
 import pandas as pd
 import requests
 import os
@@ -25,15 +22,13 @@ def get_intraday_data(symbol, interval, api_key, start_date, end_date):
 
     while current_date >= start_date:
         year_month = current_date.strftime("%Y-%m")
-        # url = f'https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={symbol}&interval={interval}&apikey={api_key}&outputsize=full&month={year_month}'
-
         querystring = {
-            "function":"TIME_SERIES_INTRADAY",
-            "symbol":SYMBOL,
-            "interval":INTERVAL,
-            "outputsize":"full",
-            "month":year_month,
-            "datatype":"json"
+            "function": "TIME_SERIES_INTRADAY",
+            "symbol": symbol,
+            "interval": interval,
+            "outputsize": "full",
+            "month": year_month,
+            "datatype": "json"
         }
         print(f'Fetching data for {year_month}')
         response = requests.get(url, headers=headers, params=querystring)
@@ -41,6 +36,7 @@ def get_intraday_data(symbol, interval, api_key, start_date, end_date):
             data = response.json()
             if 'Time Series (1min)' in data:
                 df = pd.DataFrame.from_dict(data['Time Series (1min)'], orient='index')
+                df.index.name = 'Datetime'
                 df = df.rename(columns={
                     '1. open': 'Open',
                     '2. high': 'High',
@@ -55,107 +51,25 @@ def get_intraday_data(symbol, interval, api_key, start_date, end_date):
                 print(f"Unexpected data format for {year_month}: {data}")
         else:
             print(f"HTTP Error: {response.status_code}")
-
-        current_date -= timedelta(days=30)
-        time.sleep(60 / API_CALLS_LIMIT)  # 避免API速率限制
+        
+        time.sleep(60 / API_CALLS_LIMIT)  # Respect API rate limit
+        current_date = current_date - timedelta(days=31)
 
     if data_frames:
-        full_data = pd.concat(data_frames)
-        full_data = full_data[~full_data.index.duplicated(keep='first')]  # 删除重复数据
-        return full_data
+        df = pd.concat(data_frames)
+        df = df.sort_index()
+        return df
     else:
-        return pd.DataFrame()  # 返回空的 DataFrame 以防止后续代码出错
-
-def get_full_data(symbol, interval, api_key, start_date=None, end_date=None, days=None):
-    if days:
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
-    elif not (start_date and end_date):
-        raise ValueError("Either days or both start_date and end_date must be specified")
-    return get_intraday_data(symbol, interval, api_key, start_date, end_date)
-
-def compute_rsi(series, period=14):
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    RS = gain / loss
-    rsi = 100 - (100 / (1 + RS))
-    return rsi
-
-def compute_macd(series, slow=26, fast=12, signal=9):
-    fast_ema = series.ewm(span=fast, min_periods=1, adjust=False).mean()
-    slow_ema = series.ewm(span=slow, min_periods=1, adjust=False).mean()
-    macd = fast_ema - slow_ema
-    signal_line = macd.ewm(span=signal, min_periods=1, adjust=False).mean()
-    macd_hist = macd - signal_line
-    return macd, signal_line, macd_hist
-
-def compute_bollinger_bands(series, window=20, num_std_dev=2):
-    rolling_mean = series.rolling(window=window).mean()
-    rolling_std = series.rolling(window=window).std()
-    upper_band = rolling_mean + (rolling_std * num_std_dev)
-    lower_band = rolling_mean - (rolling_std * num_std_dev)
-    return upper_band, lower_band
-
-def compute_mfi(df, window=14):
-    typical_price = (df['High'] + df['Low'] + df['Close']) / 3
-    money_flow = typical_price * df['Volume']
-    positive_flow = money_flow.where(typical_price > typical_price.shift(1), 0)
-    negative_flow = money_flow.where(typical_price < typical_price.shift(1), 0)
-    positive_mf = positive_flow.rolling(window=window).sum()
-    negative_mf = negative_flow.rolling(window=window).sum()
-    mfi = 100 - (100 / (1 + (positive_mf / negative_mf)))
-    return mfi
-
-def compute_cci(df, window=20):
-    typical_price = (df['High'] + df['Low'] + df['Close']) / 3
-    rolling_mean = typical_price.rolling(window=window).mean()
-    rolling_std = typical_price.rolling(window=window).std()
-    cci = (typical_price - rolling_mean) / (0.015 * rolling_std)
-    return cci
+        return pd.DataFrame()
 
 def compute_true_range(df):
-    high_low = df['High'] - df['Low']
-    high_close = (df['High'] - df['Close'].shift()).abs()
-    low_close = (df['Low'] - df['Close'].shift()).abs()
-    true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    return true_range
-
-def compute_historical_volatility(df, window=14):
-    log_return = np.log(df['Close'] / df['Close'].shift(1))
-    volatility = log_return.rolling(window=window).std() * np.sqrt(252)
-    return volatility
-
-def compute_price_volume(df):
-    price_volume = df['Close'] * df['Volume']
-    return price_volume
-
-def compute_momentum(df, period=10):
-    momentum = df['Close'].diff(period)
-    return momentum
-
-def compute_stochastic_oscillator(df, window=14):
-    lowest_low = df['Low'].rolling(window=window).min()
-    highest_high = df['High'].rolling(window=window).max()
-    stochastic_oscillator = ((df['Close'] - lowest_low) / (highest_high - lowest_low)) * 100
-    return stochastic_oscillator
-
-def compute_gap(df):
-    gap = df['Open'] - df['Close'].shift(1)
-    return gap
-
-def compute_volume_change(df):
-    volume_change = df['Volume'].pct_change()
-    return volume_change
-
-def compute_ema(df, span):
-    ema = df['Close'].ewm(span=span, adjust=False).mean()
-    return ema
-
-def compute_atr(df, window=14):
-    true_range = compute_true_range(df)
-    atr = true_range.rolling(window=window).mean()
-    return atr
+    print("record1")
+    df['High-Low'] = df['High'] - df['Low']
+    df['High-Previous_Close'] = np.abs(df['High'] - df['Previous_Close'])
+    df['Low-Previous_Close'] = np.abs(df['Low'] - df['Previous_Close'])
+    df['True_Range'] = df[['High-Low', 'High-Previous_Close', 'Low-Previous_Close']].max(axis=1)
+    print("record2")
+    return df
 
 def compute_advanced_technical_indicators(df):
     df['RSI'] = compute_rsi(df['Close'])
@@ -168,15 +82,125 @@ def compute_advanced_technical_indicators(df):
     df['Stochastic_Oscillator'] = compute_stochastic_oscillator(df)
     df['Gap'] = compute_gap(df)
     df['Volume_Change'] = compute_volume_change(df)
-    df['EMA_50'] = compute_ema(df, 50)
-    df['EMA_200'] = compute_ema(df, 200)
+    df['EMA_50'] = compute_ema(df['Close'], 50)
+    df['EMA_200'] = compute_ema(df['Close'], 200)
     df['ATR'] = compute_atr(df)
     df['MFI'] = compute_mfi(df)
     df['CCI'] = compute_cci(df)
-
+    df['Consolidation_Range'] = compute_consolidation_range(df)
+    df['Keltner_High'], df['Keltner_Low'] = compute_keltner_channel(df)
+    df['Donchian_High'], df['Donchian_Low'] = compute_donchian_channel(df)
+    df['OBV'] = compute_obv(df)
+    df['CMF'] = compute_cmf(df)
     df = df.ffill().bfill()
     
     return df
+
+def compute_rsi(series, window=14):
+    delta = series.diff(1)
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(window=window, min_periods=1).mean()
+    avg_loss = loss.rolling(window=window, min_periods=1).mean()
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def compute_macd(series, fast=12, slow=26, signal=9):
+    exp1 = series.ewm(span=fast, adjust=False).mean()
+    exp2 = series.ewm(span=slow, adjust=False).mean()
+    macd = exp1 - exp2
+    signal_line = macd.ewm(span=signal, adjust=False).mean()
+    macd_hist = macd - signal_line
+    return macd, signal_line, macd_hist
+
+def compute_bollinger_bands(series, window=20):
+    sma = series.rolling(window).mean()
+    std = series.rolling(window).std()
+    upper_band = sma + (std * 2)
+    lower_band = sma - (std * 2)
+    return upper_band, lower_band
+
+def compute_historical_volatility(df, window=30):
+    log_returns = np.log(df['Close'] / df['Close'].shift(1))
+    volatility = log_returns.rolling(window).std() * np.sqrt(252)  # Annualize
+    return volatility
+
+def compute_price_volume(df):
+    return df['Close'] * df['Volume']
+
+def compute_momentum(df, window=10):
+    return df['Close'].diff(window)
+
+def compute_stochastic_oscillator(df, window=14):
+    low_min = df['Low'].rolling(window=window).min()
+    high_max = df['High'].rolling(window=window).max()
+    k = 100 * (df['Close'] - low_min) / (high_max - low_min)
+    return k
+
+def compute_gap(df):
+    df['Gap'] = df['Open'] - df['Previous_Close']
+    return df['Gap']
+
+def compute_volume_change(df):
+    return df['Volume'].pct_change()
+
+def compute_ema(series, span):
+    return series.ewm(span=span, adjust=False).mean()
+
+def compute_atr(df, window=14):
+    high_low = df['High'] - df['Low']
+    high_close = np.abs(df['High'] - df['Previous_Close'])
+    low_close = np.abs(df['Low'] - df['Previous_Close'])
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = ranges.max(axis=1)
+    atr = true_range.rolling(window=window).mean()
+    return atr
+
+def compute_mfi(df, window=14):
+    typical_price = (df['High'] + df['Low'] + df['Close']) / 3
+    money_flow = typical_price * df['Volume']
+    positive_flow = money_flow.where(typical_price > typical_price.shift(1), 0)
+    negative_flow = money_flow.where(typical_price < typical_price.shift(1), 0)
+    positive_mf = positive_flow.rolling(window=window).sum()
+    negative_mf = negative_flow.rolling(window=window).sum()
+    mfi = 100 - (100 / (1 + (positive_mf / negative_mf)))
+    return mfi
+
+def compute_cci(df, window=20):
+    tp = (df['High'] + df['Low'] + df['Close']) / 3
+    sma = tp.rolling(window).mean()
+    mad = tp.rolling(window).apply(lambda x: np.mean(np.abs(x - np.mean(x))), raw=True)
+    cci = (tp - sma) / (0.015 * mad)
+    return cci
+
+def compute_consolidation_range(df, window=30):
+    rolling_high = df['High'].rolling(window=window).max()
+    rolling_low = df['Low'].rolling(window=window).min()
+    consolidation_range = rolling_high - rolling_low
+    return consolidation_range
+
+def compute_keltner_channel(df, window=20):
+    typical_price = (df['High'] + df['Low'] + df['Close']) / 3
+    kelter_middle = typical_price.rolling(window).mean()
+    atr = compute_atr(df, window)
+    kelter_high = kelter_middle + (2 * atr)
+    kelter_low = kelter_middle - (2 * atr)
+    return kelter_high, kelter_low
+
+def compute_donchian_channel(df, window=20):
+    donchian_high = df['High'].rolling(window).max()
+    donchian_low = df['Low'].rolling(window).min()
+    return donchian_high, donchian_low
+
+def compute_obv(df):
+    obv = (np.sign(df['Close'].diff()) * df['Volume']).cumsum()
+    return obv
+
+def compute_cmf(df, window=20):
+    mfv = ((df['Close'] - df['Low']) - (df['High'] - df['Close'])) / (df['High'] - df['Low']) * df['Volume']
+    cmf = mfv.rolling(window).sum() / df['Volume'].rolling(window).sum()
+    return cmf
 
 def update_daily_data(symbol, interval, api_key):
     data_dir = 'data/daily_data'
@@ -186,13 +210,14 @@ def update_daily_data(symbol, interval, api_key):
     if not os.path.exists(original_data_dir):
         os.makedirs(original_data_dir)
     
-    files = os.listdir(data_dir)
+    files = [f for f in os.listdir(data_dir) if not f.startswith('.')]
     if not files:
         print("No existing data found. Fetching the last 120 days of data.")
         start_date = datetime.now() - timedelta(days=120)
         end_date = datetime.now()
     else:
         latest_file = max(files)
+        print(latest_file)
         latest_date_str = latest_file.split('_')[-1].split('.')[0]
         latest_date = datetime.strptime(latest_date_str, '%Y-%m-%d')
         start_date = latest_date + timedelta(days=1)
@@ -211,9 +236,20 @@ def update_daily_data(symbol, interval, api_key):
     df.to_csv(original_file_path)
     print(f"Saved original data to {original_file_path}")
 
-    df = df.sort_index()
+    '''
+    df = pd.read_csv(original_file_path)
+    if not df.columns[0] == 'Datetime':
+        df = df.rename(columns={df.columns[0]: 'Datetime'})
+
+    # 将第一列转换为日期时间格式，并设置为索引
+    df['Datetime'] = pd.to_datetime(df['Datetime'])
+    df.set_index('Datetime', inplace=True)
+    df.iloc[:, 1:] = df.iloc[:, 1:].astype(float)
+    print (df.index)
+    '''
+
     df['Previous_Close'] = df['Close'].shift(1)
-    df['True_Range'] = compute_true_range(df)
+    df = compute_true_range(df)
 
     df = compute_advanced_technical_indicators(df)
 
