@@ -33,16 +33,16 @@ def create_sequences(data, input_window, output_window):
     xs, ys = [], []
     for i in range(len(data) - input_window - output_window):
         x = data.iloc[i:(i + input_window)].values
-        y = data.iloc[(i + input_window):(i + input_window + output_window)]['Close'].values[-1]  # 预测最后一个时间点的Close
+        y = data.iloc[(i + input_window):(i + input_window + output_window)][['Open', 'High', 'Low', 'Close']].values
         xs.append(x)
         ys.append(y)
     return np.array(xs), np.array(ys)
 
 # 创建序列
-features = data.drop(columns=['Close'])  # 使用除 'Close' 以外的特征进行预测
-target = data['Close']
+features = data.drop(columns=['Open', 'High', 'Low', 'Close'])  # 使用除OHLC以外的特征进行预测
+ohlc = data[['Open', 'High', 'Low', 'Close']]
 
-x, y = create_sequences(features, input_window, output_window)
+x, y = create_sequences(data, input_window, output_window)
 
 # 训练集和测试集划分
 train_size = int(len(x) * train_size)
@@ -56,8 +56,8 @@ x_test_tensor = torch.tensor(x_test, dtype=torch.float32)
 y_test_tensor = torch.tensor(y_test, dtype=torch.float32)
 
 # 构建 N-BEATSx 模型
-model = NBeatsNet(device='cuda', stack_types=(NBeatsNet.GENERIC_BLOCK, NBeatsNet.GENERIC_BLOCK), 
-                  forecast_length=output_window, backcast_length=input_window, thetas_dim=(4, 4), 
+model = NBeatsNet(device='cpu', stack_types=(NBeatsNet.GENERIC_BLOCK, NBeatsNet.GENERIC_BLOCK), 
+                  forecast_length=output_window * 4, backcast_length=input_window, thetas_dim=(4, 4), 
                   nb_blocks_per_stack=3, share_weights_in_stack=True, hidden_layer_units=512)
 
 # 损失函数和优化器
@@ -69,7 +69,7 @@ for epoch in range(epochs):
     model.train()
     optimizer.zero_grad()
     forecast = model(x_train_tensor).squeeze()
-    loss = criterion(forecast, y_train_tensor)
+    loss = criterion(forecast, y_train_tensor.view(-1, output_window * 4))
     loss.backward()
     optimizer.step()
     if epoch % 10 == 0:
@@ -79,13 +79,16 @@ for epoch in range(epochs):
 model.eval()
 with torch.no_grad():
     forecast = model(x_test_tensor).squeeze()
-    loss = criterion(forecast, y_test_tensor)
+    loss = criterion(forecast, y_test_tensor.view(-1, output_window * 4))
     print(f'Validation Loss: {loss.item()}')
 
-# 可视化结果
+# 还原预测结果的形状
+forecast = forecast.view(-1, output_window, 4).cpu().numpy()
+
+# 可视化结果（仅以Close为例）
 plt.figure(figsize=(15, 5))
-plt.plot(y_test, label='True')
-plt.plot(forecast.cpu(), label='Forecast')
+plt.plot(y_test[:, -1, 3], label='True Close')  # 真实的Close值
+plt.plot(forecast[:, -1, 3], label='Forecast Close')  # 预测的Close值
 plt.legend()
 plt.show()
 
@@ -96,8 +99,8 @@ with torch.no_grad():
     test_features = model.backcast(x_test_tensor).cpu().numpy()
 
 # 将 N-BEATSx 特征作为 XGBoost 的输入
-xgb_train = xgb.DMatrix(train_features, label=y_train)
-xgb_test = xgb.DMatrix(test_features, label=y_test)
+xgb_train = xgb.DMatrix(train_features, label=y_train[:, -1, 3])  # 使用Close作为标签
+xgb_test = xgb.DMatrix(test_features, label=y_test[:, -1, 3])
 
 # XGBoost 参数
 params = {
@@ -114,12 +117,12 @@ xgb_model = xgb.train(params, xgb_train, num_boost_round=100)
 xgb_forecast = xgb_model.predict(xgb_test)
 
 # 计算 XGBoost 的均方误差
-xgb_mse = mean_squared_error(y_test, xgb_forecast)
+xgb_mse = mean_squared_error(y_test[:, -1, 3], xgb_forecast)
 print(f'XGBoost MSE: {xgb_mse}')
 
-# 可视化 XGBoost 结果
+# 可视化 XGBoost 结果（仅以Close为例）
 plt.figure(figsize=(15, 5))
-plt.plot(y_test, label='True')
-plt.plot(xgb_forecast, label='XGBoost Forecast')
+plt.plot(y_test[:, -1, 3], label='True Close')
+plt.plot(xgb_forecast, label='XGBoost Forecast Close')
 plt.legend()
 plt.show()
