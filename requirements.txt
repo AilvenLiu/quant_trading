@@ -8,3 +8,4 @@ schedule
 matplotlib
 seaborn
 nbeats-pytorch
+ib_insync
