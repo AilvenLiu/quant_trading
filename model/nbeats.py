@@ -3,14 +3,12 @@ import pandas as pd
 import numpy as np
 import torch
 from torch import nn
-from sklearn.metrics import mean_squared_error
+from torch.utils.data import DataLoader, Dataset
 from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_squared_error, mean_absolute_error
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
-from matplotlib.animation import PillowWriter  # For saving as GIF
-import xgboost as xgb
-from torch.utils.data import DataLoader, Dataset
-from torch.cuda.amp import GradScaler, autocast
+from matplotlib.animation import PillowWriter
 
 # 设置设备
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -20,7 +18,7 @@ class TimeSeriesDataset(Dataset):
     def __init__(self, data, input_window, output_window):
         self.input_window = input_window
         self.output_window = output_window
-        self.data = data.astype(np.float32)  # Ensure float32 dtype
+        self.data = data.astype(np.float32)
 
     def __len__(self):
         return len(self.data) - self.input_window - self.output_window
@@ -30,102 +28,67 @@ class TimeSeriesDataset(Dataset):
         y = self.data[idx + self.input_window:idx + self.input_window + self.output_window, 3]  # 仅使用 Close 作为目标
         return x, y
 
-# 自定义的 N-BEATSx 模型
-class NBeatsx(nn.Module):
-    def __init__(self, input_dim, forecast_length, backcast_length, hidden_units, stacks, blocks_per_stack):
-        super(NBeatsx, self).__init__()
-        self.input_dim = input_dim
-        self.forecast_length = forecast_length
-        self.backcast_length = backcast_length
-        self.hidden_units = hidden_units
-        self.stacks = nn.ModuleList([
-            nn.ModuleList([
-                self.Block(input_dim, forecast_length, backcast_length, hidden_units)
-                for _ in range(blocks_per_stack)
-            ])
-            for _ in range(stacks)
-        ])
-
-    class Block(nn.Module):
-        def __init__(self, input_dim, forecast_length, backcast_length, hidden_units):
-            super(NBeatsx.Block, self).__init__()
-            self.fc = nn.Sequential(
-                nn.Linear(input_dim * backcast_length, hidden_units),
-                nn.ReLU(),
-                nn.Dropout(0.2),  # 添加 Dropout
-                nn.Linear(hidden_units, hidden_units),
-                nn.ReLU(),
-                nn.Dropout(0.2),  # 添加 Dropout
-                nn.Linear(hidden_units, input_dim * backcast_length + forecast_length)
-            )
-
-        def forward(self, x):
-            x = x.view(x.size(0), -1)  # Flatten the input
-            return self.fc(x)
+# 模型定义
+class MarketModel(nn.Module):
+    def __init__(self, input_dim, d_model, num_heads, num_layers, output_window):
+        super(MarketModel, self).__init__()
+        self.lstm = nn.LSTM(input_dim, d_model, num_layers=2, batch_first=True, dropout=0.2)
+        self.transformer = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(d_model=d_model, nhead=num_heads, dropout=0.2),
+            num_layers=num_layers
+        )
+        self.fc = nn.Linear(d_model, output_window)
 
     def forward(self, x):
-        residual = x
-        forecast = torch.zeros((x.size(0), self.forecast_length), device=x.device, dtype=torch.float32)  # Ensure float32
-        for stack in self.stacks:
-            for block in stack:
-                block_forecast = block(residual)
-                backcast_size = self.backcast_length * self.input_dim
-                forecast_size = self.forecast_length
-                backcast = block_forecast[:, :backcast_size]
-                forecast_delta = block_forecast[:, -forecast_size:]
-                residual = residual - backcast.view(x.size(0), self.backcast_length, self.input_dim)
-                forecast += forecast_delta
-        return forecast
+        # LSTM
+        x, _ = self.lstm(x)
+        
+        # Transformer expects input [seq_len, batch_size, d_model], transpose dimensions
+        x = x.permute(1, 0, 2)
+        
+        # Transformer
+        x = self.transformer(x)
+        
+        # Get the last output from the sequence
+        x = x[-1, :, :]
+        
+        # Fully connected layer
+        x = self.fc(x)
+        return x
 
 def create_sequences(data, input_window, output_window, step_size):
     xs, ys = [], []
     for i in range(0, len(data) - input_window - output_window + 1, step_size):
-        x = data[i:(i + input_window), :].astype(np.float32)  # Ensure float32 dtype
-        y = data[(i + input_window):(i + input_window + output_window), 3].astype(np.float32)  # 仅使用 Close 作为目标
+        x = data[i:(i + input_window), :].astype(np.float32)
+        y = data[(i + input_window):(i + input_window + output_window), 3].astype(np.float32)
         xs.append(x)
         ys.append(y)
     return np.array(xs), np.array(ys)
 
-def train_nbeatsx_model(train_loader, input_dim, output_window, input_window, hidden_units, epochs=300):
-    # Initialize the model and scaler
-    model = NBeatsx(
-        input_dim=input_dim,
-        forecast_length=output_window,
-        backcast_length=input_window,
-        hidden_units=hidden_units,
-        stacks=3,
-        blocks_per_stack=3
-    ).to(device)
-    scaler = GradScaler()
-
+def train_model(train_loader, input_dim, d_model, num_heads, num_layers, output_window, input_window, epochs=300):
+    # 初始化 MarketModel 模型
+    model = MarketModel(input_dim=input_dim, d_model=d_model, num_heads=num_heads, num_layers=num_layers, output_window=output_window).to(device)
+    
     # 损失函数和优化器
-    criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    criterion = nn.HuberLoss()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)
+    
+    # 学习率调度器
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=10, factor=0.5, verbose=True)
 
-    # 使用学习率调度器
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5, verbose=True)
-
-    # 训练 N-BEATSx 模型
+    # 模型训练
     for epoch in range(epochs):
         model.train()
         epoch_loss = 0
         for x_batch, y_batch in train_loader:
             x_batch, y_batch = x_batch.to(device), y_batch.to(device)
             optimizer.zero_grad()
-
-            # Use autocast for mixed precision
-            with autocast():
-                forecast = model(x_batch)
-                loss = criterion(forecast, y_batch)
-
-            # Scale the loss and backpropagate
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-
+            forecast = model(x_batch)
+            loss = criterion(forecast, y_batch)
+            loss.backward()
+            optimizer.step()
             epoch_loss += loss.item()
         
-        # 在每个 epoch 结束后调用调度器
         scheduler.step(epoch_loss / len(train_loader))
         
         if epoch % 10 == 0:
@@ -146,28 +109,14 @@ def evaluate_model(model, data_loader, output_window):
     return np.array(predictions), np.array(true_values)
 
 def visualize_predictions_gif(predictions, true_values, file_name, output_dir, step_size=1, output_window=10):
-    """
-    Create a GIF animation that shows the evolution of predictions over time.
-
-    :param predictions: numpy array of predicted values, shape (num_samples, output_window)
-    :param true_values: numpy array of true values, shape (num_samples, output_window)
-    :param file_name: base name of the file for naming outputs
-    :param output_dir: directory to save output GIFs
-    :param step_size: step size for frames in the animation
-    :param output_window: number of steps in the prediction window
-    """
-    
-    # Ensure predictions and true values have the same number of samples
     assert len(predictions) == len(true_values), "Predictions and true values must have the same length."
 
     num_samples = len(predictions)
     fig, ax = plt.subplots(figsize=(15, 5))
 
-    # Initialize lines for true and predicted values
     line_true, = ax.plot([], [], label='True Close', color='blue', lw=1.5)
     line_pred, = ax.plot([], [], label='Predicted Close', color='orange', lw=1.5)
 
-    # Set initial plot parameters
     ax.set_title(f"{file_name}")
     ax.set_xlabel('Time Step')
     ax.set_ylabel('Close Price')
@@ -175,91 +124,96 @@ def visualize_predictions_gif(predictions, true_values, file_name, output_dir, s
     ax.grid(True)
 
     def init():
-        """ Initialize the animation frame """
         line_true.set_data([], [])
         line_pred.set_data([], [])
         return line_true, line_pred
 
     def update(frame):
-        # Calculate dynamic x-axis range
-        start = 0  # Always start from the beginning
-        end = frame + output_window  # Display data up to the current frame + window
-        
-        # Adjust end to ensure it does not exceed the number of samples
+        start = 0
+        end = frame + output_window
         if end > num_samples:
             end = num_samples
 
-        # Prepare data for the current frame
         x = np.arange(start, end)
-        y_true = true_values[start:end, -1]  # Use the last prediction value for visualization
-        y_pred = predictions[start:end, -1]  # Use the last prediction value for visualization
+        y_true = true_values[start:end, -1]
+        y_pred = predictions[start:end, -1]
 
-        # Update the data of each line
         line_true.set_data(x, y_true)
         line_pred.set_data(x, y_pred)
-        
-        # Update x and y limits dynamically
+
         ax.set_xlim(0, end)
-        y_min = min(np.min(y_true), np.min(y_pred)) - 0.5
-        y_max = max(np.max(y_true), np.max(y_pred)) + 0.5
+        y_min = min(np.min(y_true), np.min(y_pred)) - 5
+        y_max = max(np.max(y_true), np.max(y_pred)) + 5
         ax.set_ylim(y_min, y_max)
 
         return line_true, line_pred
 
-    # Create animation
     ani = FuncAnimation(fig, update, frames=np.arange(0, num_samples - output_window, step_size),
                         init_func=init, blit=True, repeat=False)
     
-    # Save animation as GIF
     gif_file = os.path.join(output_dir, f'{file_name}.gif')
     ani.save(gif_file, writer=PillowWriter(fps=5))
-    
     plt.close()
 
 def main():
-    # 加载数据
     data_dir = 'data/daily_data'
     all_files = [os.path.join(data_dir, f) for f in os.listdir(data_dir) if f.endswith('.csv')]
 
-    # 计算 80% 的文件用于训练，20% 用于测试
     split_index = int(len(all_files) * 0.8)
     train_files = all_files[:split_index]
     test_files = all_files[split_index:]
 
-    input_window = 60  # 输入窗口大小（分钟）
-    output_window = 10  # 输出窗口大小（分钟）
-    hidden_units = 256  # 隐藏层单元数量
-    step_size = 1  # 步长为1，进行每分钟预测
+    input_window = 60
+    output_window = 10
+    hidden_units = 256  # 此行无效，因为 `hidden_units` 不在 `train_model` 使用
+    step_size = 1
+    d_model = 64
+    num_heads = 4
+    num_layers = 2
 
-    # 训练模型
+    feature_scaler = StandardScaler()
+    target_scaler = StandardScaler()
+
     train_data_list = []
+    all_close_prices = []
+    
     for file in train_files:
         df = pd.read_csv(file, index_col='Datetime', parse_dates=True)
-        data_scaled = StandardScaler().fit_transform(df.dropna().astype(np.float32))  # Ensure float32 dtype
+        all_close_prices.append(df['Close'].values)
+        data_scaled = feature_scaler.fit_transform(df.dropna().astype(np.float32))
         train_data_list.append(data_scaled)
+
+    all_close_prices = np.concatenate(all_close_prices, axis=0).reshape(-1, 1)
+    target_scaler.fit(all_close_prices)
 
     train_data = np.concatenate(train_data_list, axis=0)
     train_dataset = TimeSeriesDataset(train_data, input_window, output_window)
     train_loader = DataLoader(train_dataset, batch_size=1024, shuffle=True, num_workers=4, pin_memory=True)
 
-    # 模型训练
-    model = train_nbeatsx_model(train_loader, input_dim=train_data.shape[1], output_window=output_window, input_window=input_window, hidden_units=hidden_units)
+    model = train_model(
+        train_loader,
+        input_dim=train_data.shape[1],
+        d_model=d_model,
+        num_heads=num_heads,
+        num_layers=num_layers,
+        output_window=output_window,
+        input_window=input_window
+    )
 
-    # 验证模型并保存结果
     for file in test_files:
         df = pd.read_csv(file, index_col='Datetime', parse_dates=True)
-        data_scaled = StandardScaler().fit_transform(df.dropna().astype(np.float32))  # Ensure float32 dtype
+        data_scaled = feature_scaler.transform(df.dropna().astype(np.float32))
         test_dataset = TimeSeriesDataset(data_scaled, input_window, output_window)
         test_loader = DataLoader(test_dataset, batch_size=1024, shuffle=False, num_workers=4, pin_memory=True)
 
-        # 预测和评估
         predictions, true_values = evaluate_model(model, test_loader, output_window)
 
-        # 创建文件夹保存预测结果的图像
+        predictions = target_scaler.inverse_transform(predictions)
+        true_values = target_scaler.inverse_transform(true_values)
+
         output_dir = os.path.join('model', 'predictions', os.path.basename(file).replace('.csv', ''))
         os.makedirs(output_dir, exist_ok=True)
 
-        # 可视化预测结果为 GIF
         visualize_predictions_gif(predictions, true_values, os.path.basename(file), output_dir, step_size=step_size, output_window=output_window)
 
 if __name__ == '__main__':
