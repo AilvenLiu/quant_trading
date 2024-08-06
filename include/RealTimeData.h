@@ -1,18 +1,21 @@
-#ifndef SHAREDMEMORYSERVER_H
-#define SHAREDMEMORYSERVER_H
+#ifndef REALTIMEDATA_H
+#define REALTIMEDATA_H
 
 #include <iostream>
 #include <string>
-#include <thread>
-#include <mutex>
-#include <sstream>
-#include <boost/interprocess/shared_memory_object.hpp>
-#include <boost/interprocess/mapped_region.hpp>
 #include <vector>
+#include <sstream>
+#include <fstream>
+#include <chrono>
+#include <thread>
+#include <ctime>
+#include <mutex>
+#include <iomanip>
+#include <atomic>
 #include <set>  // Include for std::set
-#include "Logger.h"
 #include "EClientSocket.h"
 #include "EWrapper.h"
+#include "Logger.h"
 
 // Include necessary headers for IB API types
 #include "FamilyCode.h"
@@ -26,23 +29,28 @@
 #include "HistoricalTickLast.h"
 
 using namespace std;
-using namespace boost::interprocess;
 
-class SharedMemoryServer : public EWrapper {
+class RealTimeData : public EWrapper {
 private:
     EClientSocket *client;
     Logger *logger;
-    shared_memory_object shm;
-    mapped_region region;
-    std::mutex dataMutex;
-    stringstream dataBuffer;
-
+    ofstream l1DataFile;
+    ofstream l2DataFile;
+    ofstream combinedDataFile;
     int nextOrderId;
     int requestId;
+    string l1FilePath;
+    string l2FilePath;
+    string combinedFilePath;
+    mutex dataMutex;
+    atomic<bool> marketOpen;
+
+    // Helper functions for feature engineering
+    string calculateFeatures(const string &l1Data, const vector<string> &l2Data);
 
 public:
-    SharedMemoryServer(Logger *log);
-    ~SharedMemoryServer();
+    RealTimeData(Logger *log);
+    ~RealTimeData();
 
     // EWrapper interface implementations
     void tickPrice(TickerId tickerId, TickType field, double price, const TickAttrib &attrib) override;
@@ -57,7 +65,10 @@ public:
     // Helper functions
     void connectToIB();
     void requestData();
-    void writeToSharedMemory(const std::string &data);
+    bool isMarketOpen();
+    void writeL1Data(const std::string &data);
+    void writeL2Data(const std::string &data);
+    void writeCombinedData(const std::string &data);
 
     // Unused EWrapper methods (implement as needed)
     void tickOptionComputation(TickerId tickerId, TickType tickType, int tickAttrib, double impliedVol, double delta, double optPrice, double pvDividend, double gamma, double vega, double theta, double undPrice) override {}
@@ -108,12 +119,12 @@ public:
     void positionMultiEnd(int reqId) override {}
     void accountUpdateMulti(int reqId, const std::string &account, const std::string &modelCode, const std::string &key, const std::string &value, const std::string &currency) override {}
     void accountUpdateMultiEnd(int reqId) override {}
-    void securityDefinitionOptionalParameter(int reqId, const std::string &exchange, int underlyingConId, const std::string &tradingClass, const std::string &multiplier, const std::setstd::string &expirations, const std::set &strikes) override {}
+    void securityDefinitionOptionalParameter(int reqId, const std::string &exchange, int underlyingConId, const std::string &tradingClass, const std::string &multiplier, const std::set<std::string> &expirations, const std::set<double> &strikes) override {}
     void securityDefinitionOptionalParameterEnd(int reqId) override {}
-    void softDollarTiers(int reqId, const std::vector &tiers) override {} // Updated
-    void familyCodes(const std::vector &familyCodes) override {} // Updated
-    void symbolSamples(int reqId, const std::vector &contractDescriptions) override {} // Updated
-    void mktDepthExchanges(const std::vector &depthMktDataDescriptions) override {} // Updated
+    void softDollarTiers(int reqId, const std::vector<SoftDollarTier> &tiers) override {} // Updated
+    void familyCodes(const std::vector<FamilyCode> &familyCodes) override {} // Updated
+    void symbolSamples(int reqId, const std::vector<ContractDescription> &contractDescriptions) override {} // Updated
+    void mktDepthExchanges(const std::vector<DepthMktDataDescription> &depthMktDataDescriptions) override {} // Updated
     void tickNews(int tickerId, time_t timeStamp, const std::string &providerCode, const std::string &articleId, const std::string &headline, const std::string &extraData) override {}
     void smartComponents(int reqId, const SmartComponentsMap &theMap) override {}
     void tickReqParams(int tickerId, double minTick, const std::string &bboExchange, int snapshotPermissions) override {}
@@ -143,6 +154,6 @@ public:
     void wshEventData(int reqId, const std::string &dataJson) override {}
     void historicalSchedule(int reqId, const std::string &startDateTime, const std::string &endDateTime, const std::string &timeZone, const std::vector &sessions) override {} // Updated
     void userInfo(int reqId, const std::string &whiteBrandingId) override {}
-};
+    };
 
-#endif // SHAREDMEMORYSERVER_H
+#endif // REALTIMEDATA_H

@@ -1,35 +1,39 @@
 #include "SharedMemoryServer.h"
 
-SharedMemoryServer::SharedMemoryServer(Logger *log) : logger(log), client(new EClientSocket(this, nullptr)) {
-    shm = shared_memory_object(create_only, "SharedMemory", read_write);
-    shm.truncate(65536); // Set the size of the shared memory segment
+// Constructor
+SharedMemoryServer::SharedMemoryServer(Logger *log) : client(nullptr), logger(log), nextOrderId(0), requestId(0) {
+    // Create shared memory object
+    shm = shared_memory_object(create_only, "RealTimeData", read_write);
+    shm.truncate(1024);  // Adjust size as needed
     region = mapped_region(shm, read_write);
 
-    std::memset(region.get_address(), 0, region.get_size());
-
-    nextOrderId = 0;
-    requestId = 1; // Start with 1
+    connectToIB();
 }
 
+// Destructor
 SharedMemoryServer::~SharedMemoryServer() {
-    delete client;
-    shared_memory_object::remove("SharedMemory");
+    if (client) delete client;
+    shared_memory_object::remove("RealTimeData");
 }
 
 void SharedMemoryServer::connectToIB() {
-    const char *host = "";
+    client = new EClientSocket(this, nullptr);
+    // Connection setup
+    const char *host = "127.0.0.1";
     int port = 7496;
     int clientId = 0;
 
-    while (!client->isConnected()) {
-        bool isConnected = client->eConnect(host, port, clientId);
-        if (isConnected) {
-            logger->info("Connected to TWS server");
-            client->setServerLogLevel(5);
-        } else {
-            logger->error("Could not connect to TWS server, retrying in 5 seconds...");
-            std::this_thread::sleep_for(std::chrono::seconds(5));
-        }
+    if (client->eConnect(host, port, clientId)) {
+        logger->log("Connected to IB TWS");
+    } else {
+        logger->log("Failed to connect to IB TWS");
+    }
+}
+
+void SharedMemoryServer::start() {
+    while (true) {
+        requestData();
+        std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 }
 
@@ -37,88 +41,74 @@ void SharedMemoryServer::requestData() {
     Contract contract;
     contract.symbol = "SPY";
     contract.secType = "STK";
-    contract.exchange = "ARCA";
+    contract.exchange = "SMART";
     contract.currency = "USD";
 
-    client->reqMktData(requestId++, contract, "", false, false, TagValueListSPtr());
-    client->reqMktDepth(requestId++, contract, 10, false, TagValueListSPtr());
-}
-
-void SharedMemoryServer::start() {
-    connectToIB();
-    requestData();
-
-    while (client->isConnected()) {
-        client->checkMessages();
-        std::this_thread::sleep_for(std::chrono::seconds(1)); // Ensure a fixed interval of 1 second
-    }
-}
-
-void SharedMemoryServer::writeToSharedMemory(const std::string &data) {
-    std::lock_guard<std::mutex> lock(dataMutex);
-    std::memset(region.get_address(), 0, region.get_size());
-    std::memcpy(region.get_address(), data.c_str(), std::min(data.size(), region.get_size() - 1));
+    // Request L1 and L2 data
+    client->reqMktData(++requestId, contract, "", false, false, TagValueListSPtr());
+    client->reqMktDepth(++requestId, contract, 5, true);
 }
 
 void SharedMemoryServer::tickPrice(TickerId tickerId, TickType field, double price, const TickAttrib &attrib) {
-    if (field == BID || field == ASK || field == LAST || field == CLOSE || field == OPEN || field == HIGH || field == LOW) {
-        time_t now = chrono::system_clock::to_time_t(chrono::system_clock::now());
-        char buf[80];
-        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", localtime(&now));
+    std::lock_guard<std::mutex> lock(dataMutex);
 
-        stringstream ss;
-        ss << buf << "," << tickerId << "," << field << "," << price;
+    std::ostringstream oss;
+    oss << "Tick Price: " << tickerId << " Field: " << field << " Price: " << price;
+    logger->log(oss.str());
 
-        logger->info("L1 Data: " + ss.str());
-
-        writeToSharedMemory(ss.str());
-    }
+    // Write to shared memory
+    writeToSharedMemory(oss.str());
 }
 
-void SharedMemoryServer::tickSize(TickerId tickerId, TickType field, int size) {
-    time_t now = chrono::system_clock::to_time_t(chrono::system_clock::now());
-    char buf[80];
-    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", localtime(&now));
+void SharedMemoryServer::tickSize(TickerId tickerId, TickType field, Decimal size) {
+    std::lock_guard<std::mutex> lock(dataMutex);
 
-    stringstream ss;
-    ss << buf << "," << tickerId << "," << field << "," << size;
+    std::ostringstream oss;
+    oss << "Tick Size: " << tickerId << " Field: " << field << " Size: " << size;
+    logger->log(oss.str());
 
-    logger->info("L1 Size: " + ss.str());
-
-    writeToSharedMemory(ss.str());
+    // Write to shared memory
+    writeToSharedMemory(oss.str());
 }
 
-void SharedMemoryServer::updateMktDepth(TickerId id, int position, int operation, int side, double price, int size) {
-    time_t now = chrono::system_clock::to_time_t(chrono::system_clock::now());
-    char buf[80];
-    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", localtime(&now));
+void SharedMemoryServer::updateMktDepth(TickerId id, int position, int operation, int side, double price, Decimal size) {
+    std::lock_guard<std::mutex> lock(dataMutex);
 
-    stringstream ss;
-    ss << buf << "," << id << "," << position << "," << operation << "," << side << "," << price << "," << size;
+    std::ostringstream oss;
+    oss << "Update Mkt Depth: " << id << " Position: " << position << " Operation: " << operation << " Side: " << side << " Price: " << price << " Size: " << size;
+    logger->log(oss.str());
 
-    logger->info("L2 Data: " + ss.str());
-
-    writeToSharedMemory(ss.str());
+    // Write to shared memory
+    writeToSharedMemory(oss.str());
 }
 
-void SharedMemoryServer::updateMktDepthL2(TickerId id, int position, const std::string &marketMaker, int operation, int side, double price, int size, bool isSmartDepth) {
-    time_t now = chrono::system_clock::to_time_t(chrono::system_clock::now());
-    char buf[80];
-    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", localtime(&now));
+void SharedMemoryServer::updateMktDepthL2(TickerId id, int position, const std::string &marketMaker, int operation, int side, double price, Decimal size, bool isSmartDepth) {
+    std::lock_guard<std::mutex> lock(dataMutex);
 
-    stringstream ss;
-    ss << buf << "," << id << "," << position << "," << marketMaker << "," << operation << "," << side << "," << price << "," << size << "," << isSmartDepth;
+    std::ostringstream oss;
+    oss << "Update Mkt Depth L2: " << id << " Position: " << position << " MarketMaker: " << marketMaker << " Operation: " << operation << " Side: " << side << " Price: " << price << " Size: " << size << " SmartDepth: " << isSmartDepth;
+    logger->log(oss.str());
 
-    logger->info("L2 Data L2: " + ss.str());
-
-    writeToSharedMemory(ss.str());
+    // Write to shared memory
+    writeToSharedMemory(oss.str());
 }
 
-void SharedMemoryServer::error(int id, int errorCode, const std::string &errorString) {
-    logger->error("Error: " + to_string(id) + ", Code: " + to_string(errorCode) + ", Msg: " + errorString);
+void SharedMemoryServer::error(int id, int errorCode, const std::string &errorString, const std::string &advancedOrderRejectJson) {
+    std::lock_guard<std::mutex> lock(dataMutex);
+
+    std::ostringstream oss;
+    oss << "Error ID: " << id << " Code: " << errorCode << " Msg: " << errorString;
+    logger->log(oss.str());
 }
 
 void SharedMemoryServer::nextValidId(OrderId orderId) {
     nextOrderId = orderId;
-    logger->info("Next Valid Order ID: " + to_string(orderId));
+    logger->log("Next valid order ID: " + std::to_string(orderId));
+}
+
+void SharedMemoryServer::writeToSharedMemory(const std::string &data) {
+    std::lock_guard<std::mutex> lock(dataMutex);
+
+    // Copy data into shared memory
+    std::memcpy(region.get_address(), data.c_str(), data.size());
 }
