@@ -1,32 +1,28 @@
 cmake_minimum_required(VERSION 3.25)
-project(QuantTrading)
+project(OpenSTX)
 
 # Set C++ standard
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 14)
 
-# Include directories
-include_directories(
-    ${PROJECT_SOURCE_DIR}/include
-    ${PROJECT_SOURCE_DIR}/api/include
-)
+# Set include directories for project headers and API headers
+include_directories(${PROJECT_SOURCE_DIR}/include)
+include_directories(${PROJECT_SOURCE_DIR}/api/include)
 
-# Library directories
-link_directories(
-    ${PROJECT_SOURCE_DIR}/api/lib
-)
+# Add source files for the main project
+file(GLOB_RECURSE PROJECT_SOURCES "${PROJECT_SOURCE_DIR}/src/*.cpp")
 
-# Add source files
-file(GLOB PROJECT_SOURCES
-    "${PROJECT_SOURCE_DIR}/src/*.cpp"
-    "${PROJECT_SOURCE_DIR}/src/data/*.cpp"
-    "${PROJECT_SOURCE_DIR}/src/logger/*.cpp"
-)
+# Specify the output directories for binaries and libraries
+set(EXECUTABLE_OUTPUT_PATH "${PROJECT_SOURCE_DIR}/bin")
+set(LIBRARY_OUTPUT_PATH "${PROJECT_SOURCE_DIR}/lib")
 
-# Add executable
+# Add executable target for the project
 add_executable(QuantTrading ${PROJECT_SOURCES})
 
 # Find Boost libraries
 find_package(Boost REQUIRED COMPONENTS system filesystem)
+
+# Find OpenSSL libraries
+find_package(OpenSSL REQUIRED)
 
 # Verify Boost presence
 if(Boost_FOUND)
@@ -37,16 +33,29 @@ else()
     message(FATAL_ERROR "Boost not found!")
 endif()
 
-# Link Boost and IB TWS libraries
-target_link_libraries(QuantTrading 
-    ${Boost_LIBRARIES}
-    ib_tws  # Ensure that libib_tws.dylib is present in api/lib
-)
+# Verify OpenSSL presence
+if(OpenSSL_FOUND)
+    message(STATUS "OpenSSL found!")
+    message(STATUS "OpenSSL include dirs: ${OPENSSL_INCLUDE_DIR}")
+    message(STATUS "OpenSSL libraries: ${OPENSSL_LIBRARIES}")
+else()
+    message(FATAL_ERROR "OpenSSL not found!")
+endif()
 
-# Set visibility of symbols in the executable
-set_target_properties(QuantTrading PROPERTIES
-    CXX_VISIBILITY_PRESET hidden
-    VISIBILITY_INLINES_HIDDEN 1
+# Specify the architecture for M1
+if (APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
+    message(STATUS "Building for Apple Silicon (arm64)")
+    set(CMAKE_OSX_ARCHITECTURES "arm64")
+endif()
+
+# Set the path to the TWS API dynamic library
+set(TWS_LIB "${PROJECT_SOURCE_DIR}/api/lib/libib_tws.dylib")
+
+# Link libraries to the executable
+target_link_libraries(QuantTrading
+    ${TWS_LIB}               # Link TWS API library
+    ${Boost_LIBRARIES}       # Link Boost libraries
+    ${OPENSSL_LIBRARIES}     # Link OpenSSL libraries
 )
 
 # Installation rules
@@ -54,7 +63,10 @@ install(TARGETS QuantTrading
     RUNTIME DESTINATION bin
 )
 
-install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
-    DESTINATION include
-    FILES_MATCHING PATTERN "*.h"
-)
+# Set compiler options for macOS
+if (APPLE)
+    # Enforce use of RPATH to locate shared libraries on macOS
+    set_target_properties(QuantTrading PROPERTIES
+        INSTALL_RPATH "@loader_path/../lib"
+    )
+endif()

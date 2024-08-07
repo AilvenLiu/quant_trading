@@ -24,9 +24,9 @@ void SharedMemoryServer::connectToIB() {
     int clientId = 0;
 
     if (client->eConnect(host, port, clientId)) {
-        logger->log("Connected to IB TWS");
+        STX_LOGI(logger, "Connected to IB TWS");
     } else {
-        logger->log("Failed to connect to IB TWS");
+        STX_LOGE(logger, "Failed to connect to IB TWS");
     }
 }
 
@@ -46,7 +46,7 @@ void SharedMemoryServer::requestData() {
 
     // Request L1 and L2 data
     client->reqMktData(++requestId, contract, "", false, false, TagValueListSPtr());
-    client->reqMktDepth(++requestId, contract, 5, true);
+    client->reqMktDepth(++requestId, contract, 5, true, TagValueListSPtr());
 }
 
 void SharedMemoryServer::tickPrice(TickerId tickerId, TickType field, double price, const TickAttrib &attrib) {
@@ -54,7 +54,7 @@ void SharedMemoryServer::tickPrice(TickerId tickerId, TickType field, double pri
 
     std::ostringstream oss;
     oss << "Tick Price: " << tickerId << " Field: " << field << " Price: " << price;
-    logger->log(oss.str());
+    STX_LOGI(logger, oss.str());
 
     // Write to shared memory
     writeToSharedMemory(oss.str());
@@ -65,7 +65,7 @@ void SharedMemoryServer::tickSize(TickerId tickerId, TickType field, Decimal siz
 
     std::ostringstream oss;
     oss << "Tick Size: " << tickerId << " Field: " << field << " Size: " << size;
-    logger->log(oss.str());
+    STX_LOGI(logger, oss.str());
 
     // Write to shared memory
     writeToSharedMemory(oss.str());
@@ -76,7 +76,7 @@ void SharedMemoryServer::updateMktDepth(TickerId id, int position, int operation
 
     std::ostringstream oss;
     oss << "Update Mkt Depth: " << id << " Position: " << position << " Operation: " << operation << " Side: " << side << " Price: " << price << " Size: " << size;
-    logger->log(oss.str());
+    STX_LOGI(logger, oss.str());
 
     // Write to shared memory
     writeToSharedMemory(oss.str());
@@ -87,7 +87,7 @@ void SharedMemoryServer::updateMktDepthL2(TickerId id, int position, const std::
 
     std::ostringstream oss;
     oss << "Update Mkt Depth L2: " << id << " Position: " << position << " MarketMaker: " << marketMaker << " Operation: " << operation << " Side: " << side << " Price: " << price << " Size: " << size << " SmartDepth: " << isSmartDepth;
-    logger->log(oss.str());
+    STX_LOGI(logger, oss.str());
 
     // Write to shared memory
     writeToSharedMemory(oss.str());
@@ -98,12 +98,12 @@ void SharedMemoryServer::error(int id, int errorCode, const std::string &errorSt
 
     std::ostringstream oss;
     oss << "Error ID: " << id << " Code: " << errorCode << " Msg: " << errorString;
-    logger->log(oss.str());
+    STX_LOGE(logger, oss.str());
 }
 
 void SharedMemoryServer::nextValidId(OrderId orderId) {
     nextOrderId = orderId;
-    logger->log("Next valid order ID: " + std::to_string(orderId));
+    STX_LOGI(logger, "Next valid order ID: " + std::to_string(orderId));
 }
 
 void SharedMemoryServer::writeToSharedMemory(const std::string &data) {

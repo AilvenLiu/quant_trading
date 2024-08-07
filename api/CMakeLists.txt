@@ -40,16 +40,22 @@ else()
     message(FATAL_ERROR "OpenSSL not found!")
 endif()
 
+# Specify the architecture for M1
+if (APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
+    message(STATUS "Building for Apple Silicon (arm64)")
+    set(CMAKE_OSX_ARCHITECTURES "arm64")
+endif()
+
 # Link Boost and OpenSSL libraries
 target_link_libraries(ib_tws 
     ${Boost_LIBRARIES} 
     ${OPENSSL_LIBRARIES}
 )
 
-# Optionally, you can define the visibility of symbols in the shared library
+# Ensure symbol visibility settings
 set_target_properties(ib_tws PROPERTIES
-    CXX_VISIBILITY_PRESET hidden
-    VISIBILITY_INLINES_HIDDEN 1
+    CXX_VISIBILITY_PRESET default # Change to default for visibility
+    VISIBILITY_INLINES_HIDDEN 0   # Disable inlines visibility hidden
 )
 
 # Installation rules

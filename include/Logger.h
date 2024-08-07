@@ -5,11 +5,14 @@
 #include <fstream>
 #include <string>
 #include <mutex>
+#include <ctime>
 
-enum LogLevel {
-    INFO,
-    WARNING,
+// 定义日志级别的枚举
+enum class LogLevel {
+    FATAL,
     ERROR,
+    WARNING,
+    INFO,
     DEBUG
 };
 
@@ -19,18 +22,22 @@ private:
     std::mutex logMutex;
     LogLevel logLevel;
 
-    std::string getLogLevelString(LogLevel level);
+    std::string getTimestamp() const;
 
 public:
-    Logger(const std::string &filename, LogLevel level = INFO);
+    Logger(const std::string& filename, LogLevel level = LogLevel::INFO);
     ~Logger();
 
-    void log(LogLevel level, const std::string &message);
+    void log(LogLevel level, const std::string& message);
 
-    void info(const std::string &message);
-    void warning(const std::string &message);
-    void error(const std::string &message);
-    void debug(const std::string &message);
+    static std::string logLevelToString(LogLevel level);
 };
+
+// 定义日志宏
+#define STX_LOGF(logger, message) (logger)->log(LogLevel::FATAL, message)
+#define STX_LOGE(logger, message) (logger)->log(LogLevel::ERROR, message)
+#define STX_LOGW(logger, message) (logger)->log(LogLevel::WARNING, message)
+#define STX_LOGI(logger, message) (logger)->log(LogLevel::INFO, message)
+#define STX_LOGD(logger, message) (logger)->log(LogLevel::DEBUG, message)
 
 #endif // LOGGER_H

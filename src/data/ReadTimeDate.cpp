@@ -30,9 +30,9 @@ void RealTimeData::connectToIB() {
     int clientId = 0;
 
     if (client->eConnect(host, port, clientId)) {
-        logger->log("Connected to IB TWS");
+        STX_LOGI(logger, "Connected to IB TWS");
     } else {
-        logger->log("Failed to connect to IB TWS");
+        STX_LOGE(logger, "Failed to connect to IB TWS");
     }
 }
 
@@ -65,7 +65,7 @@ void RealTimeData::requestData() {
 
     // Request L1 and L2 data
     client->reqMktData(++requestId, contract, "", false, false, TagValueListSPtr());
-    client->reqMktDepth(++requestId, contract, 5, true);
+    client->reqMktDepth(++requestId, contract, 5, true, TagValueListSPtr());
 }
 
 void RealTimeData::tickPrice(TickerId tickerId, TickType field, double price, const TickAttrib &attrib) {
@@ -73,10 +73,10 @@ void RealTimeData::tickPrice(TickerId tickerId, TickType field, double price, co
 
     std::ostringstream oss;
     oss << "Tick Price: " << tickerId << " Field: " << field << " Price: " << price;
-    logger->log(oss.str());
+    STX_LOGI(logger, oss.str());
 
     // Write L1 data
-    if (field == LAST_PRICE || field == BID_PRICE || field == ASK_PRICE) {
+    if (field == LAST || field == BID || field == ASK) {
         writeL1Data(oss.str());
     }
 }
@@ -86,7 +86,7 @@ void RealTimeData::tickSize(TickerId tickerId, TickType field, Decimal size) {
 
     std::ostringstream oss;
     oss << "Tick Size: " << tickerId << " Field: " << field << " Size: " << size;
-    logger->log(oss.str());
+    STX_LOGI(logger, oss.str());
 
     // Write L1 data
     if (field == LAST_SIZE || field == BID_SIZE || field == ASK_SIZE) {
@@ -99,7 +99,8 @@ void RealTimeData::updateMktDepth(TickerId id, int position, int operation, int 
 
     std::ostringstream oss;
     oss << "Update Mkt Depth: " << id << " Position: " << position << " Operation: " << operation << " Side: " << side << " Price: " << price << " Size: " << size;
-    logger->log(oss.str());
+    STX_LOGI(logger, oss.str());
+    
 
     // Write L2 data
     writeL2Data(oss.str());
@@ -110,7 +111,7 @@ void RealTimeData::updateMktDepthL2(TickerId id, int position, const std::string
 
     std::ostringstream oss;
     oss << "Update Mkt Depth L2: " << id << " Position: " << position << " MarketMaker: " << marketMaker << " Operation: " << operation << " Side: " << side << " Price: " << price << " Size: " << size << " SmartDepth: " << isSmartDepth;
-    logger->log(oss.str());
+    STX_LOGI(logger, oss.str());
 
     // Write L2 data
     writeL2Data(oss.str());
@@ -121,12 +122,12 @@ void RealTimeData::error(int id, int errorCode, const std::string &errorString, 
 
     std::ostringstream oss;
     oss << "Error ID: " << id << " Code: " << errorCode << " Msg: " << errorString;
-    logger->log(oss.str());
+    STX_LOGE(logger, oss.str());
 }
 
 void RealTimeData::nextValidId(OrderId orderId) {
     nextOrderId = orderId;
-    logger->log("Next valid order ID: " + std::to_string(orderId));
+    STX_LOGI(logger, "Next valid order ID: " + std::to_string(orderId));
 }
 
 void RealTimeData::writeL1Data(const std::string &data) {
