@@ -9,7 +9,11 @@ include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(${PROJECT_SOURCE_DIR}/api/include)
 
 # Add source files for the main project
-file(GLOB_RECURSE PROJECT_SOURCES "${PROJECT_SOURCE_DIR}/src/*.cpp")
+file(GLOB_RECURSE PROJECT_SOURCES 
+    "${PROJECT_SOURCE_DIR}/src/logger/Logger.cpp"
+    "${PROJECT_SOURCE_DIR}/src/data/RealTimeData.cpp"
+    "${PROJECT_SOURCE_DIR}/src/main.cpp"
+)
 
 # Specify the output directories for binaries and libraries
 set(EXECUTABLE_OUTPUT_PATH "${PROJECT_SOURCE_DIR}/bin")

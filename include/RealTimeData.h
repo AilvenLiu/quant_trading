@@ -1,3 +1,24 @@
+/**************************************************************************
+ * This file is part of the OpenSTX project.
+ *
+ * OpenSTX (Open Smart Trading eXpert) is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * OpenSTX is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with OpenSTX. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * Author: Ailven.LIU
+ * Email: ailven.x.liu@gmail.com
+ * Date: 2024
+ *************************************************************************/
+
 #ifndef REALTIMEDATA_H
 #define REALTIMEDATA_H
 
@@ -10,9 +31,12 @@
 #include <thread>
 #include <ctime>
 #include <mutex>
+#include <memory>
 #include <iomanip>
 #include <atomic>
 #include <set>  // Include for std::set
+#include <boost/interprocess/shared_memory_object.hpp>
+#include <boost/interprocess/mapped_region.hpp>
 #include "EClientSocket.h"
 #include "EWrapper.h"
 #include "Logger.h"
@@ -29,44 +53,63 @@
 #include "HistoricalTickLast.h"
 
 class RealTimeData : public EWrapper {
+public:
+    RealTimeData(const std::shared_ptr<Logger>& log);
+    ~RealTimeData();
+
+    void start();
+    void connectToIB();
+    bool isMarketOpen();
+    void requestData();
+    std::time_t getNYTime();
+    void aggregateMinuteData();
+
+    // EWrapper interface methods
+    void tickPrice(TickerId tickerId, TickType field, double price, const TickAttrib &attrib) override;
+    void tickSize(TickerId tickerId, TickType field, Decimal size) override;
+    void updateMktDepth(TickerId id, int position, int operation, int side, double price, Decimal size) override;
+    void updateMktDepthL2(TickerId id, int position, const std::string &marketMaker, int operation, int side, double price, Decimal size, bool isSmartDepth) override;
+    void error(int id, int errorCode, const std::string &errorString, const std::string &advancedOrderRejectJson) override;
+    void nextValidId(OrderId orderId) override;
+
 private:
-    EClientSocket *client;
-    Logger *logger;
+    std::shared_ptr<EClientSocket> client;
+    std::shared_ptr<Logger> logger;
     std::ofstream l1DataFile;
     std::ofstream l2DataFile;
     std::ofstream combinedDataFile;
-    int nextOrderId;
-    int requestId;
+
     std::string l1FilePath;
     std::string l2FilePath;
     std::string combinedFilePath;
+
+    std::vector<double> l1Prices;
+    std::vector<Decimal> l1Volumes;
+    std::vector<std::map<std::string, double>> l2Data;
+
+    std::vector<double> l2BidPrices;
+    std::vector<Decimal> l2BidSizes;
+    std::vector<double> l2AskPrices;
+    std::vector<Decimal> l2AskSizes;
+
+    OrderId nextOrderId;
+    int requestId;
+    double yesterdayClose;
+
+    boost::interprocess::shared_memory_object shm;
+    boost::interprocess::mapped_region region;
     std::mutex dataMutex;
-    std::atomic<bool> marketOpen;
 
-    // Helper functions for feature engineering
-    std::string calculateFeatures(const std::string &l1Data, const std::vector<std::string> &l2Data);
-
-public:
-    RealTimeData(Logger *log);
-    ~RealTimeData();
-
-    // EWrapper interface implementations
-    void tickPrice(TickerId tickerId, TickType field, double price, const TickAttrib &attrib) override;
-    void tickSize(TickerId tickerId, TickType field, Decimal size) override; // Updated
-    void updateMktDepth(TickerId id, int position, int operation, int side, double price, Decimal size) override; // Updated
-    void updateMktDepthL2(TickerId id, int position, const std::string &marketMaker, int operation, int side, double price, Decimal size, bool isSmartDepth) override; // Updated
-    void error(int id, int errorCode, const std::string &errorString, const std::string &advancedOrderRejectJson = "") override; // Updated
-    void nextValidId(OrderId orderId) override;
-
-    void start();
+    void writeCombinedData(const std::string &data);
+    void writeToSharedMemory(const std::string &data);
+    void processL2Data(int position, double price, Decimal size, int side);
 
     // Helper functions
-    void connectToIB();
-    void requestData();
-    bool isMarketOpen();
-    void writeL1Data(const std::string &data);
-    void writeL2Data(const std::string &data);
-    void writeCombinedData(const std::string &data);
+    // void requestData();
+    // bool isMarketOpen();
+    // void writeL1Data(const std::string &data);
+    // void writeL2Data(const std::string &data);
+    // void writeCombinedData(const std::string &data);
 
     // Unused EWrapper methods, implement to avoid a pure virtual class
     void tickOptionComputation( TickerId tickerId, TickType tickType, int tickAttrib, double impliedVol, double delta,
