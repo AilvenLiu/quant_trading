@@ -23,18 +23,14 @@
 #include "RealTimeData.h"
 
 // Constructor
-RealTimeData::RealTimeData(const std::shared_ptr<Logger>& log) : client(nullptr), logger(log), nextOrderId(0), requestId(0), yesterdayClose(0.0) {
+RealTimeData::RealTimeData(const std::shared_ptr<Logger>& log, const std::shared_ptr<TimescaleDB>& db)
+    : client(nullptr), logger(log), timescaleDB(db), nextOrderId(0), requestId(0), yesterdayClose(0.0) {
 
-    auto now = std::chrono::system_clock::now();
-    std::time_t in_time_t = std::chrono::system_clock::to_time_t(now);
-
-    // Format the time into a string
-    char buffer[100];
-    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d", std::localtime(&in_time_t));
-    std::string date_today(buffer);
-
-    
     // Initialize paths and open files for writing
+    auto now = std::chrono::system_clock::now();
+    auto in_time_t = std::chrono::system_clock::to_time_t(now);
+    std::string date_today = std::put_time(std::localtime(&in_time_t), "%Y-%m-%d");
+
     l1FilePath = "data/realtime_original_data/l1_data_" + date_today + ".csv";
     l2FilePath = "data/realtime_original_data/l2_data_" + date_today + ".csv";
     combinedFilePath = "data/daily_realtime_data/combined_data_" + date_today + ".csv";
@@ -45,7 +41,7 @@ RealTimeData::RealTimeData(const std::shared_ptr<Logger>& log) : client(nullptr)
 
     // Write headers to the files
     l1DataFile << "Datetime,Bid,Ask,Last,Open,High,Low,Close,Volume\n";
-    l2DataFile << "Datetime,Position,BidPrice,BidSize,AskPrice,AskSize\n";
+    l2DataFile << "Datetime,PriceLevel,BidPrice,BidSize,AskPrice,AskSize\n";
     combinedDataFile << "Datetime,Open,High,Low,Close,Volume,BidAskSpread,Midpoint,PriceChange,L2Depth,Gap\n";
 
     connectToIB();
@@ -126,7 +122,7 @@ void RealTimeData::requestData() {
 
     // Request L1 and L2 data
     client->reqMktData(++requestId, contract, "", false, false, TagValueListSPtr());
-    client->reqMktDepth(++requestId, contract, 5, true, TagValueListSPtr());
+    client->reqMktDepth(++requestId, contract, 10, true, TagValueListSPtr()); // Request 10 levels of market depth
 }
 
 void RealTimeData::tickPrice(TickerId tickerId, TickType field, double price, const TickAttrib &attrib) {
@@ -167,38 +163,38 @@ void RealTimeData::updateMktDepth(TickerId id, int position, int operation, int 
     writeToSharedMemory(oss.str());
 }
 
-void RealTimeData::updateMktDepthL2(TickerId id, int position, const std::string &marketMaker, int operation, int side, double price, Decimal size, bool isSmartDepth) {
-    std::lock_guard<std::mutex> lock(dataMutex);
-    processL2Data(position, price, size, side);
-
-    std::ostringstream oss;
-    oss << "Update Mkt Depth L2: " << id << " Position: " << position << " MarketMaker: " << marketMaker << " Operation: " << operation << " Side: " << side << " Price: " << price << " Size: " << size << " SmartDepth: " << isSmartDepth;
-    STX_LOGI(logger, oss.str());
-    writeToSharedMemory(oss.str());
-}
-
 void RealTimeData::processL2Data(int position, double price, Decimal size, int side) {
     std::map<std::string, double> data;
     data["Position"] = position;
-    data["Price"] = price;
-    data["Size"] = size;
-    data["Side"] = side;
+
+    if (side == 1) {  // Bid side
+        data["BidPrice"] = price;
+        data["BidSize"] = size;
+        data["AskPrice"] = 0.0; // Not available
+        data["AskSize"] = 0.0; // Not available
+    } else {  // Ask side
+        data["BidPrice"] = 0.0; // Not available
+        data["BidSize"] = 0.0; // Not available
+        data["AskPrice"] = price;
+        data["AskSize"] = size;
+    }
+
     l2Data.push_back(data);
 
-    std::time_t now = std::time(nullptr);
-    std::ostringstream datetimeStream;
-    datetimeStream << std::put_time(std::localtime(&now), "%Y-%m-%d %H:%M:%S");
-    std::string datetime = datetimeStream.str();
+    // Write L2 data to file immediately
+    std::ostringstream oss;
+    oss << std::put_time(std::localtime(&now), "%Y-%m-%d %H:%M:%S");
+    std::string datetime = oss.str();
 
     std::ostringstream oss;
-    oss << datetime << "," << position << ",";
-    if (side == 1) {  // Bid
-        oss << price << "," << size << ",,";
-    } else if (side == 0) {  // Ask
-        oss << "," << "," << price << "," << size;
+    oss << datetime << "," << position << "," << data["BidPrice"] << "," << data["BidSize"] << ","
+        << data["AskPrice"] << "," << data["AskSize"] << "\n";
+
+    if (l2DataFile.is_open()) {
+        l2DataFile << oss.str();
     }
-    writeL2Data(oss.str());
 }
+
 void RealTimeData::error(int id, int errorCode, const std::string &errorString, const std::string &advancedOrderRejectJson) {
     std::lock_guard<std::mutex> lock(dataMutex);
 
@@ -225,45 +221,46 @@ void RealTimeData::aggregateMinuteData() {
     double low = *std::min_element(l1Prices.begin(), l1Prices.end());
     double volume = std::accumulate(l1Volumes.begin(), l1Volumes.end(), 0.0);
 
-    double bidAskSpread = 0.0, midpoint = 0.0, priceChange = 0.0, l2BidTotalDepth = 0.0, l2AskTotalDepth = 0.0;
+    double bidAskSpread = 0.0, midpoint = 0.0, priceChange = 0.0;
+    double totalL2Volume = 0.0;
+
     for (const auto &data : l2Data) {
-        if (data.at("Side") == 1) {  // Bid side
-            l2BidTotalDepth += data.at("Size");
-        } else if (data.at("Side") == 0) {  // Ask side
-            l2AskTotalDepth += data.at("Size");
-        }
+        totalL2Volume += data["BidSize"] + data["AskSize"];
     }
 
     if (!l2Data.empty()) {
-        bidAskSpread = l2Data.back().at("Price") - l2Data.front().at("Price");
-        midpoint = (l2Data.front().at("Price") + l2Data.back().at("Price")) / 2.0;
+        bidAskSpread = l2Data.back().at("AskPrice") - l2Data.front().at("BidPrice");
+        midpoint = (l2Data.front().at("BidPrice") + l2Data.back().at("AskPrice")) / 2.0;
     }
 
     double gap = open - yesterdayClose;
     yesterdayClose = close;  // Update for the next day
 
-    std::stringstream combinedData;
-    combinedData << getNYTime() << "," << open << "," << high << "," << low << "," << close << "," << volume << ","
-                 << bidAskSpread << "," << midpoint << "," << priceChange << "," << l2BidTotalDepth << "," << l2AskTotalDepth << "," << gap;
+    std::ostringstream oss;
+    oss << std::put_time(std::localtime(&now), "%Y-%m-%d %H:%M:%S");
+    std::string datetime = oss.str();
 
-    writeCombinedData(combinedData.str());
+    // Write aggregated data to combinedDataFile
+    std::stringstream combinedData;
+    combinedData << datetime << "," << open << "," << high << "," << low << "," << close << "," << volume << ","
+                 << bidAskSpread << "," << midpoint << "," << priceChange << "," << totalL2Volume << "," << gap << "\n";
+
+    if (combinedDataFile.is_open()) {
+        combinedDataFile << combinedData.str();
+    }
+
+    // Insert into TimescaleDB
+    timescaleDB->insertL1Data(datetime, {{"Bid", l1Prices.front()}, {"Ask", l1Prices.back()}, {"Last", close}, {"Open", open}, {"High", high}, {"Low", low}, {"Close", close}, {"Volume", volume}});
+    timescaleDB->insertL2Data(datetime, l2Data);
+    timescaleDB->insertFeatureData(datetime, {{"Gap", gap}, {"TodayOpen", open}, {"TotalL2Volume", totalL2Volume}});
+
+    // Write to shared memory
+    writeToSharedMemory(combinedData.str());
 
     // Clear temporary data
     l1Prices.clear();
     l1Volumes.clear();
     l2Data.clear();
-}
-
-void RealTimeData::writeCombinedData(const std::string &data) {
-    if (combinedDataFile.is_open()) {
-        combinedDataFile << data << std::endl;
-    }
-}
-
-void RealTimeData::writeL2Data(const std::string &data) {
-    if (l2DataFile.is_open()) {
-        l2DataFile << data << std::endl;
-    }
 }
 
 void RealTimeData::writeToSharedMemory(const std::string &data) {

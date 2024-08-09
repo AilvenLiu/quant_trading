@@ -1,8 +1,9 @@
 cmake_minimum_required(VERSION 3.25)
 project(OpenSTX)
 
-# Set C++ standard
-set(CMAKE_CXX_STANDARD 14)
+# Set C++ standard to C++17
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Set include directories for project headers and API headers
 include_directories(${PROJECT_SOURCE_DIR}/include)
@@ -11,6 +12,7 @@ include_directories(${PROJECT_SOURCE_DIR}/api/include)
 # Add source files for the main project
 file(GLOB_RECURSE PROJECT_SOURCES 
     "${PROJECT_SOURCE_DIR}/src/logger/Logger.cpp"
+    "${PROJECT_SOURCE_DIR}/src/database/TimescaleDB.cpp"
     "${PROJECT_SOURCE_DIR}/src/data/RealTimeData.cpp"
     "${PROJECT_SOURCE_DIR}/src/main.cpp"
 )
@@ -27,6 +29,12 @@ find_package(Boost REQUIRED COMPONENTS system filesystem)
 
 # Find OpenSSL libraries
 find_package(OpenSSL REQUIRED)
+
+# Find and link libpqxx
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(PQXX REQUIRED libpqxx)
+include_directories(${PQXX_INCLUDE_DIRS})
+link_directories(${PQXX_LIBRARY_DIRS})
 
 # Verify Boost presence
 if(Boost_FOUND)
@@ -60,6 +68,7 @@ target_link_libraries(QuantTrading
     ${TWS_LIB}               # Link TWS API library
     ${Boost_LIBRARIES}       # Link Boost libraries
     ${OPENSSL_LIBRARIES}     # Link OpenSSL libraries
+    ${PQXX_LIBRARIES}        # Link pqxx libraries
 )
 
 # Installation rules

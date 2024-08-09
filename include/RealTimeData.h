@@ -34,13 +34,15 @@
 #include <memory>
 #include <iomanip>
 #include <atomic>
+#include <map>
 #include <set>
-#include <map> 
+#include <numeric>
 #include <boost/interprocess/shared_memory_object.hpp>
 #include <boost/interprocess/mapped_region.hpp>
 #include "EClientSocket.h"
 #include "EWrapper.h"
 #include "Logger.h"
+#include "TimescaleDB.h"
 
 // Include necessary headers for IB API types
 #include "FamilyCode.h"
@@ -55,7 +57,7 @@
 
 class RealTimeData : public EWrapper {
 public:
-    RealTimeData(const std::shared_ptr<Logger>& log);
+    RealTimeData(const std::shared_ptr<Logger>& log, const std::shared_ptr<TimescaleDB>& db);
     ~RealTimeData();
 
     void start();
@@ -69,21 +71,22 @@ public:
     void tickPrice(TickerId tickerId, TickType field, double price, const TickAttrib &attrib) override;
     void tickSize(TickerId tickerId, TickType field, Decimal size) override;
     void updateMktDepth(TickerId id, int position, int operation, int side, double price, Decimal size) override;
-    void updateMktDepthL2(TickerId id, int position, const std::string &marketMaker, int operation, int side, double price, Decimal size, bool isSmartDepth) override;
     void error(int id, int errorCode, const std::string &errorString, const std::string &advancedOrderRejectJson) override;
     void nextValidId(OrderId orderId) override;
 
 private:
     std::shared_ptr<EClientSocket> client;
     std::shared_ptr<Logger> logger;
+    std::shared_ptr<TimescaleDB> timescaleDB;
+
     std::ofstream l1DataFile;
-    std::ofstream l2DataFile;
+    std::ofstream l2DataFile;    
     std::ofstream combinedDataFile;
 
     std::string l1FilePath;
     std::string l2FilePath;
     std::string combinedFilePath;
-
+    
     std::vector<double> l1Prices;
     std::vector<Decimal> l1Volumes;
     std::vector<std::map<std::string, double>> l2Data;
@@ -101,13 +104,10 @@ private:
     boost::interprocess::mapped_region region;
     std::mutex dataMutex;
 
-    void writeCombinedData(const std::string &data);
     void writeToSharedMemory(const std::string &data);
     void processL2Data(int position, double price, Decimal size, int side);
+    void calculateAndStoreFeatures(const std::string &datetime, double open, double high, double low, double close, double volume);
 
-    // Helper functions
-    void writeL1Data(const std::string &data);
-    void writeL2Data(const std::string &data);
 
     // Unused EWrapper methods, implement to avoid a pure virtual class
     void tickOptionComputation( TickerId tickerId, TickType tickType, int tickAttrib, double impliedVol, double delta,

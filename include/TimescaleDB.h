@@ -19,30 +19,29 @@
  * Date: 2024
  *************************************************************************/
 
+#ifndef TIMESCALEDB_H
+#define TIMESCALEDB_H
+
+#include <pqxx/pqxx>
+#include <string>
+#include <map>
+#include <vector>
 #include <memory>
 #include "Logger.h"
-#include "RealTimeData.h"
-#include "TimescaleDB.h"
 
-int main() {
-    // Generate a timestamp for the log file name
-    auto now = std::chrono::system_clock::now();
-    auto in_time_t = std::chrono::system_clock::to_time_t(now);
-    std::ostringstream oss;
-    oss << std::put_time(std::localtime(&now), "%Y-%m-%d");
-    std::string timestamp = oss.str();
+class TimescaleDB {
+public:
+    TimescaleDB(const std::shared_ptr<Logger>& logger, const std::string &dbname, const std::string &user, const std::string &password, const std::string &host, const std::string &port);
+    ~TimescaleDB();
 
-    std::string logFilePath = "logs/realtime_data_" + timestamp + ".log";
-    std::shared_ptr<Logger> logger = std::make_shared<Logger>(logFilePath);
-    STX_LOGI(logger, "Start main");
+    void insertL1Data(const std::string &datetime, const std::map<std::string, double> &l1Data);
+    void insertL2Data(const std::string &datetime, const std::vector<std::map<std::string, double>> &l2Data);
+    void insertFeatureData(const std::string &datetime, const std::map<std::string, double> &features);
 
-    // Initialize the TimescaleDB connection
-    std::shared_ptr<TimescaleDB> timescaleDB = std::make_shared<TimescaleDB>("dbname=openstx user=your_user password=your_password");
+private:
+    void createTables();
+    std::shared_ptr<Logger> logger;
+    pqxx::connection *conn;
+};
 
-    // Initialize RealTimeData with logger and TimescaleDB
-    std::shared_ptr<RealTimeData> dataCollector = std::make_shared<RealTimeData>(logger, timescaleDB);
-
-    dataCollector->start();
-
-    return 0;
-}
+#endif // TIMESCALEDB_H

@@ -81,6 +81,7 @@ Before you can build the project on MacOS, ensure you have the following tools i
    ```bash
    brew install cmake
    ```
+   Should use c++17 standard.
 
 3. **Boost**: A set of libraries for C++.
 
@@ -92,6 +93,12 @@ Before you can build the project on MacOS, ensure you have the following tools i
 
    ```bash
    brew install openssl
+   ```
+4. **PostgreDB**: Required for secure connections.
+
+   ```bash
+   brew install libpqxx
+   brew install pkg-config
    ```
 
 5. **GCC or Clang**: Ensure you have an up-to-date C++ compiler. The Apple Clang compiler is typically installed with Xcode.
