@@ -34,7 +34,8 @@
 #include <memory>
 #include <iomanip>
 #include <atomic>
-#include <set>  // Include for std::set
+#include <set>
+#include <map> 
 #include <boost/interprocess/shared_memory_object.hpp>
 #include <boost/interprocess/mapped_region.hpp>
 #include "EClientSocket.h"
@@ -105,11 +106,8 @@ private:
     void processL2Data(int position, double price, Decimal size, int side);
 
     // Helper functions
-    // void requestData();
-    // bool isMarketOpen();
-    // void writeL1Data(const std::string &data);
-    // void writeL2Data(const std::string &data);
-    // void writeCombinedData(const std::string &data);
+    void writeL1Data(const std::string &data);
+    void writeL2Data(const std::string &data);
 
     // Unused EWrapper methods, implement to avoid a pure virtual class
     void tickOptionComputation( TickerId tickerId, TickType tickType, int tickAttrib, double impliedVol, double delta,

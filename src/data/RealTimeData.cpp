@@ -26,9 +26,13 @@
 RealTimeData::RealTimeData(const std::shared_ptr<Logger>& log) : client(nullptr), logger(log), nextOrderId(0), requestId(0), yesterdayClose(0.0) {
 
     auto now = std::chrono::system_clock::now();
-    auto in_time_t = std::chrono::system_clock::to_time_t(now);
+    std::time_t in_time_t = std::chrono::system_clock::to_time_t(now);
 
-    std::string date_today = std::put_time(std::localtime(&in_time_t), "%Y-%m-%d");
+    // Format the time into a string
+    char buffer[100];
+    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d", std::localtime(&in_time_t));
+    std::string date_today(buffer);
+
     
     // Initialize paths and open files for writing
     l1FilePath = "data/realtime_original_data/l1_data_" + date_today + ".csv";
@@ -41,7 +45,7 @@ RealTimeData::RealTimeData(const std::shared_ptr<Logger>& log) : client(nullptr)
 
     // Write headers to the files
     l1DataFile << "Datetime,Bid,Ask,Last,Open,High,Low,Close,Volume\n";
-    l2DataFile << "Datetime,Position,Price,Size,Side\n";
+    l2DataFile << "Datetime,Position,BidPrice,BidSize,AskPrice,AskSize\n";
     combinedDataFile << "Datetime,Open,High,Low,Close,Volume,BidAskSpread,Midpoint,PriceChange,L2Depth,Gap\n";
 
     connectToIB();
@@ -180,8 +184,21 @@ void RealTimeData::processL2Data(int position, double price, Decimal size, int s
     data["Size"] = size;
     data["Side"] = side;
     l2Data.push_back(data);
-}
 
+    std::time_t now = std::time(nullptr);
+    std::ostringstream datetimeStream;
+    datetimeStream << std::put_time(std::localtime(&now), "%Y-%m-%d %H:%M:%S");
+    std::string datetime = datetimeStream.str();
+
+    std::ostringstream oss;
+    oss << datetime << "," << position << ",";
+    if (side == 1) {  // Bid
+        oss << price << "," << size << ",,";
+    } else if (side == 0) {  // Ask
+        oss << "," << "," << price << "," << size;
+    }
+    writeL2Data(oss.str());
+}
 void RealTimeData::error(int id, int errorCode, const std::string &errorString, const std::string &advancedOrderRejectJson) {
     std::lock_guard<std::mutex> lock(dataMutex);
 
@@ -208,13 +225,18 @@ void RealTimeData::aggregateMinuteData() {
     double low = *std::min_element(l1Prices.begin(), l1Prices.end());
     double volume = std::accumulate(l1Volumes.begin(), l1Volumes.end(), 0.0);
 
-    double bidAskSpread = 0.0, midpoint = 0.0, priceChange = 0.0, l2Depth = 0.0;
+    double bidAskSpread = 0.0, midpoint = 0.0, priceChange = 0.0, l2BidTotalDepth = 0.0, l2AskTotalDepth = 0.0;
+    for (const auto &data : l2Data) {
+        if (data.at("Side") == 1) {  // Bid side
+            l2BidTotalDepth += data.at("Size");
+        } else if (data.at("Side") == 0) {  // Ask side
+            l2AskTotalDepth += data.at("Size");
+        }
+    }
+
     if (!l2Data.empty()) {
-        bidAskSpread = l2Data.back()["Price"] - l2Data.front()["Price"];
-        midpoint = (l2Data.front()["Price"] + l2Data.back()["Price"]) / 2.0;
-        l2Depth = std::accumulate(l2Data.begin(), l2Data.end(), 0.0, [](double sum, const std::map<std::string, double> &data) {
-            return sum + data.at("Size");
-        });
+        bidAskSpread = l2Data.back().at("Price") - l2Data.front().at("Price");
+        midpoint = (l2Data.front().at("Price") + l2Data.back().at("Price")) / 2.0;
     }
 
     double gap = open - yesterdayClose;
@@ -222,7 +244,7 @@ void RealTimeData::aggregateMinuteData() {
 
     std::stringstream combinedData;
     combinedData << getNYTime() << "," << open << "," << high << "," << low << "," << close << "," << volume << ","
-                 << bidAskSpread << "," << midpoint << "," << priceChange << "," << l2Depth << "," << gap;
+                 << bidAskSpread << "," << midpoint << "," << priceChange << "," << l2BidTotalDepth << "," << l2AskTotalDepth << "," << gap;
 
     writeCombinedData(combinedData.str());
 
@@ -235,6 +257,12 @@ void RealTimeData::aggregateMinuteData() {
 void RealTimeData::writeCombinedData(const std::string &data) {
     if (combinedDataFile.is_open()) {
         combinedDataFile << data << std::endl;
+    }
+}
+
+void RealTimeData::writeL2Data(const std::string &data) {
+    if (l2DataFile.is_open()) {
+        l2DataFile << data << std::endl;
     }
 }
 
